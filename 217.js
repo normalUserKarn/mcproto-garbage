@@ -6,11 +6,83 @@ if (process.argv.length !== 5) {
 const net = require("net");
 const http = require("http");
 const zlib = require("zlib");
+const crypto = require('crypto');
 const fs = require("fs");
 const { v4: uuidv4 } = require("uuid");
 const playerUUID = uuidv4();
 let agent;
 let request = [];
+
+
+function derToPem(derBuffer) {
+  const base64 = derBuffer.toString('base64');
+  const lines = base64.match(/.{1,64}/g).join('\n');
+  return `-----BEGIN PUBLIC KEY-----\n${lines}\n-----END PUBLIC KEY-----`;
+}
+
+function getRsaKeySize(derBuffer) {
+  const pem = derToPem(derBuffer);
+  const keyObj = crypto.createPublicKey(pem);
+  return keyObj.asymmetricKeyDetails.modulusLength; // in bits
+}
+
+function encryptWithPublicKey(derBytes, data) {
+  const pemKey = derToPem(derBytes);
+  return crypto.publicEncrypt(
+    {
+      key: pemKey,
+      padding: crypto.constants.RSA_PKCS1_PADDING, // Required by the protocol
+    },
+    data
+  );
+}
+
+function createDecryptCipher(sharedSecret) {
+  return crypto.createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
+}
+
+function createDecryptor(sharedSecret) {
+  const cipher = require('crypto').createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
+  return function decrypt(buffer) {
+    return cipher.update(buffer); // returns decrypted Buffer
+  };
+}
+
+function createEncryptor(sharedSecret) {
+  const cipher = require('crypto').createCipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
+  return function encrypt(buffer) {
+    return cipher.update(buffer); // returns encrypted Buffer
+  };
+}
+
+
+function makePacket(id,data,socket) {
+  let dat
+  if (data) {
+    dat = Buffer.concat([Buffer.from([id]),data])
+  } else {
+    dat = Buffer.from([id])
+  }
+  if (socket) {
+    let datlength
+    if (socket.compressionThresh) {
+      if(dat.length < compressionThresh){
+        datlength = 0
+      } else {
+        datlength = dat.length
+        console.log("packet you tried to send was too big")
+      }
+      dat = Buffer.concat([makeVarInt(datlength),dat]) 
+    }
+    dat = Buffer.concat([makeVarInt(dat.length),dat])
+    if (socket.pk) {
+      dat = socket.encrypt(dat)
+    }
+  } else {
+    dat = Buffer.concat([makeVarInt(dat.length),dat]) 
+  }
+  return dat
+}
 
 function readVarInt(buffer, offset = 0) {
   let result = 0;
@@ -25,7 +97,7 @@ function readVarInt(buffer, offset = 0) {
     shift += 7;
   } while (byte & 0x80);
 
-  return { value: result, bytesRead: pos - offset };
+  return { value: result, bytesRead: pos - offset, left: buffer.slice(pos-offset), sliced: buffer.slice((pos - offset) + result), data: buffer.slice(pos - offset).slice(0,result) };
 }
 
 function countUtf16Units(str) {
@@ -71,6 +143,10 @@ function makeVarInt(data) {
   }
   bytes[bytes.length - 1] &= 0x7f;
   return Buffer.from(bytes);
+}
+
+function prefix(data){
+  return Buffer.concat([makeVarInt(data.length),data])
 }
 
 function generateRandomString(length) {
@@ -139,107 +215,122 @@ function doink(ip, port, i, handshake, count, data, sockets) {
     socket.write(data);
     //Success probably
     socket.on("data", (data) => {
-      /*if (
-        (data[1] != 0 || data.length > 64) &&
-        socket.compression &&
-        !(data[2] == 0 && data[3] == 2)
-      ) {
-        const compressedLength = readVarInt(data, 0);
-        let offset = getVarIntLength(compressedLength);
-        const uncompressedLength = readVarInt(data, compressedLength);
-        offset += getVarIntLength(uncompressedLength);
 
-        const compressedData = data.slice(offset, offset + compressedLength);
-        console.log(getVarIntLength(compressedLength));
-        let boop = zlib.inflateSync(compressedData); // Decompress using zlib
-        console.log(boop);
-      }*/
-      console.log(data);
-      console.log(data.length)
-
-      if (socket.state == "login") {
-        /*if (data[2] == 0x04) {
-          if (socket.state == "configuration") {
-            socket.write(data);
-          } else {
-            console.log("fix: " + socket.state);
-            socket.write(data);
-          }
-        }
-        if (data[2] == 0x69) {
-          console.log(data);
-        }
-        if (data[2] == 39 || data[2] == 26 || data[2] == 4) {
-          //if (socket.state == "play") console.log(data);
-          console.log("pls fix");
-          pack = data;
-          pack[2] = 0x18;
-          console.log(pack);
-          //socket.write(pack);
-          console.log("i need to revive me selfs");
-        }*/
-        let varnt = readVarInt(data)
-        let darnt = (data.slice(varnt.bytesRead + 1))
-        //Data with data length sliced off
-        // console.log(darnt)
-        if (data[2] == 0x01) {
-          if (socket.state == "login") {
-            // let decEnc = Buffer.from([0x02, 0x00, 0x01]);
-            // console.log(data)
-            let strng = darnt.slice(1)
-            // let pfxarray = 
-            let pfxvarint = readVarInt(strng)
-            let pkdat = strng.slice(pfxvarint.bytesRead)
-            let pk = pkdat.slice(0,pfxvarint.value)
-            let sliced = pkdat.slice(pfxvarint.value + pfxvarint.bytesRead)
-            let verifytknvarint = readVarInt(sliced)
-            let verifytkndat = sliced.slice(verifytknvarint.bytesRead)
-            sliced = sliced.slice(verifytknvarint.bytesRead + verifytknvarint.value)
-            
-
-            
-
-            // socket.write(decEnc);
-          }
-        }
-        /*if (data[2] == 0x0e) {
-          pack = data;
-          pack[2] = 7;
-          socket.write(pack);
-        }
-        if (data[2] == 0x0c) {
-        }
-        if (data[2] == 0x02) {
-          //console.log("Acknowledged Logon");
-          socket.write(Buffer.from([0x02, 0x00, 0x03]));
-          socket.state = "configuration";
-          //Writing Client Info
-          const packet = Buffer.concat([
-            Buffer.from([0x0f, 0x00]), // Packet length (adjusted to match payload length)
-            Buffer.from([0x00]), // No compression byte
-            Buffer.from([0x05]), // Length of locale string ("en_GB")
-            Buffer.from("en_GB", "utf-8"), // Locale string
-            Buffer.from([0x08]), // View distance (Byte)
-            Buffer.from([0x00]), // Chat mode (VarInt, assuming 0 for enabled)
-            Buffer.from([0x01]), // Chat colors (Boolean, enabled)
-            Buffer.from([0x40]), // Displayed skin parts (bitmask)
-            Buffer.from([0x00]), // Main hand (VarInt, assuming 0 for left)
-            Buffer.from([0x00]), // Enable text filtering (Boolean, disabled)
-            Buffer.from([0x01]), // Allow server listings (Boolean, enabled)
-          ]);
-        }
-        if (data[1] == 0x03 && !socket.compression) {
-          if (socket.state == "login") {
-            socket.compression = true;
-          }
-        }
-        if (data[2] == 0x03) {
-          if (socket.state == "configuration") {
-            socket.write(Buffer.from([0x02, 0x00, 0x03]));
-            socket.state = "play";
-          }
-        } */
+      let fdata
+      if (socket.encrypted) {
+        fdata = socket.decrypt(data)
+        // console.log(fdata)
+      } else {
+        fdata = data
       }
+      console.log(fdata)
+      if (socket.compression) {
+        if (fdata.length < socket.compressionThresh) {
+          // fdata = readVarInt(fdata).left
+        } else {
+          console.log("Packet too big")
+        }
+      }
+
+      let varnt = readVarInt(fdata)
+      // console.log(varnt)
+      let darnt = (fdata.slice(varnt.bytesRead + 1))
+      let id = (fdata.slice(varnt.bytesRead)[0])
+      console.log(varnt)
+      console.log(fdata);
+      console.log("FULL " + id)
+
+      /*if (data[2] == 0x04) {
+        if (socket.state == "configuration") {
+          socket.write(data);
+        } else {
+          console.log("fix: " + socket.state);
+          socket.write(data);
+        }
+      }
+      if (data[2] == 0x69) {
+        console.log(data);
+      }
+      if (data[2] == 39 || data[2] == 26 || data[2] == 4) {
+        //if (socket.state == "play") console.log(data);
+        console.log("pls fix");
+        pack = data;
+        pack[2] = 0x18;
+        console.log(pack);
+        //socket.write(pack);
+        console.log("i need to revive me selfs");
+      }*/
+
+
+
+
+      //Data with data length sliced off
+      // console.log(darnt)
+      if (socket.state == "login") {
+        if (id == 0x01) {
+          // let decEnc = Buffer.from([0x02, 0x00, 0x01]);
+          // let pkarray = 
+          let strvarint = readVarInt(darnt)
+          let pkvarint = readVarInt(strvarint.left)
+          let pkdat = pkvarint.left
+          let pk = pkvarint.data
+          let sliced = pkvarint.sliced
+          let verifytknvarint = readVarInt(sliced)
+          let verifytkndat = verifytknvarint.left
+          let verifytkn = verifytknvarint.data
+          // console.log(verifytknvarint.sliced)
+          if(sliced == 1){
+            console.log("AUTHENTICATION REQUIRED, QUITTING")
+          }else{
+            console.log("Encrypting connection")
+            sharedSecret = crypto.randomBytes(16)
+            socket.decrypt = createDecryptor(sharedSecret)
+            socket.decrypt = createEncryptor(sharedSecret)
+            socket.pk = pk
+            socket.encrypted = true
+            // console.log(pk)
+            // console.log(sharedSecret)
+            // console.log(verifytkn)
+            let secret = encryptWithPublicKey(pk,sharedSecret)
+            let tkn = encryptWithPublicKey(pk,verifytkn)
+            let pack = Buffer.concat([prefix(secret),prefix(tkn)])
+            // console.log(readVarInt(prefix(secret)))
+            pack = makePacket(0x01,pack)
+            // console.log(readVarInt(pack))
+            socket.write(pack)
+          }
+        }
+        if (id == 0x03) {
+          // Enable Compression
+          socket.compressionThresh = readVarInt(darnt).value
+          socket.compression = true
+          console.log("compressing past " + socket.compressionThresh + " bytes")
+        } 
+        if (id == 0x02) {
+          // Login Success
+          let uuid = darnt.slice(0,16)
+          let sliced = darnt.slice(16,darnt.length)
+          let usernamevarint = readVarInt(sliced)
+          socket.username = usernamevarint.data.toString()
+          console.log("logged in as: " + socket.username)
+          //so were gonna ignore this for now
+          let propertyvarint = readVarInt(usernamevarint.sliced)
+          // console.log(propertyvarint)
+          //write login acknowledgement
+          // socket.write(makePacket(0x03,null,socket))
+          socket.state = "configuration"
+          // write plugin message
+          //
+          // socket.write(makePacket(0x02,null,socket))
+        } 
+      }
+      if (id == 0x00) { 
+        //SHIT I GOT KICKED
+        let jsonvarint = readVarInt(darnt)
+        console.log("Disconnected: " + jsonvarint.data.toString())
+      }
+
+
     });
     socket.on("error", (err) => {
       console.error(`Error connecting bot ${i}: ${err.message}`);
