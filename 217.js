@@ -49,7 +49,7 @@ function createEncryptor(sharedSecret) {
 }
 
 
-function makePacket(id,data,socket) {
+function makePacket(id,data,socket,debug) {
   let dat
   if (data) {
     dat = Buffer.concat([Buffer.from([id]),data])
@@ -59,7 +59,7 @@ function makePacket(id,data,socket) {
   if (socket) {
     let datlength
     if (socket.compressionThresh) {
-      if(dat.length < compressionThresh){
+      if(dat.length < socket.compressionThresh){
         datlength = 0
       } else {
         datlength = dat.length
@@ -68,8 +68,11 @@ function makePacket(id,data,socket) {
       dat = Buffer.concat([makeVarInt(datlength),dat]) 
     }
     dat = Buffer.concat([makeVarInt(dat.length),dat])
+    if (debug) {
+      console.log(readVarInt(dat))
+    }
     if (socket.pk) {
-      console.log('encrypting packet')
+      // console.log('encrypting packet')
       dat = socket.encrypt(dat)
     }
   } else {
@@ -116,16 +119,9 @@ function readString(buffer, maxCodeUnits = 32767, offset = 0) {
     throw new Error("String exceeds max UTF-16 code units");
   }
 
-  return { string: str, bytesRead: end - offset, byteLen: byteLength };
+  return { string: str, bytesRead: end - offset, byteLen: byteLength, sliced: buffer.slice(end - offset) };
 }
-function getVarIntLength(value) {
-  let length = 0;
-  do {
-    value >>= 7;
-    length++;
-  } while (value !== 0);
-  return length;
-}
+
 function makeVarInt(data) {
   if (data < 0x80) {
     return Buffer.from([data]);
@@ -138,6 +134,32 @@ function makeVarInt(data) {
   bytes[bytes.length - 1] &= 0x7f;
   return Buffer.from(bytes);
 }
+
+function makeString(str, maxCodeUnits = 32767) {
+  // Count UTF-16 code units
+  const codeUnits = [...str].reduce((sum, char) => {
+    const code = char.codePointAt(0);
+    return sum + (code > 0xFFFF ? 2 : 1);
+  }, 0);
+
+  if (codeUnits > maxCodeUnits) {
+    throw new Error(`String exceeds max UTF-16 code units (${codeUnits}/${maxCodeUnits})`);
+  }
+
+  const utf8Bytes = Buffer.from(str, 'utf8');
+  const lengthBuf = makeVarInt(utf8Bytes.length);
+  return Buffer.concat([lengthBuf, utf8Bytes]);
+}
+
+function getVarIntLength(value) {
+  let length = 0;
+  do {
+    value >>= 7;
+    length++;
+  } while (value !== 0);
+  return length;
+}
+
 
 function prefix(data){
   return Buffer.concat([makeVarInt(data.length),data])
@@ -213,13 +235,12 @@ function doink(ip, port, i, handshake, count, data, sockets) {
       let fdata
       if (socket.encrypted) {
         fdata = socket.decrypt(data)
-        console.log(fdata)
       } else {
         fdata = data
       }
       if (socket.compression) {
         if (fdata.length < socket.compressionThresh) {
-          // fdata = readVarInt(fdata).left
+          fdata = readVarInt(fdata).left
         } else {
           console.log("Packet too big")
         }
@@ -227,6 +248,7 @@ function doink(ip, port, i, handshake, count, data, sockets) {
 
       let varnt = readVarInt(fdata)
       // console.log(varnt)
+      // before you ask, there isn't any reasoning for calling this varialble darnt
       let darnt = (fdata.slice(varnt.bytesRead + 1))
       let id = (fdata.slice(varnt.bytesRead)[0])
       console.log(fdata);
@@ -236,6 +258,11 @@ function doink(ip, port, i, handshake, count, data, sockets) {
       //Data with data length sliced off
       // console.log(darnt)
       if (socket.state == "login") {
+        if (id == 0x00) { 
+          //SHIT I GOT KICKED
+          let jsonvarint = readVarInt(darnt)
+          console.log("Disconnected during login: " + jsonvarint.data.toString())
+        }
         if (id == 0x01) {
           // let decEnc = Buffer.from([0x02, 0x00, 0x01]);
           // let pkarray = 
@@ -254,7 +281,7 @@ function doink(ip, port, i, handshake, count, data, sockets) {
             console.log("Encrypting connection")
             sharedSecret = crypto.randomBytes(16)
             socket.decrypt = createDecryptor(sharedSecret)
-            // socket.decrypt = createEncryptor(sharedSecret)
+            socket.encrypt = createEncryptor(sharedSecret)
             socket.pk = pk
             socket.encrypted = true
             // console.log(pk)
@@ -286,18 +313,49 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           let propertyvarint = readVarInt(usernamevarint.sliced)
           // console.log(propertyvarint)
           //write login acknowledgement
-          // socket.write(makePacket(0x03,null,socket))
+          socket.write(makePacket(0x03,null,socket))
           socket.state = "configuration"
-          // write plugin message
-          //
-          // socket.write(makePacket(0x02,null,socket))
+          console.log("switching to configuration")
+          // write plugin message (this includes your client brand apparently, minecraft, fabric, feather, etc)
+          let ident = makeString("minecraft:brand")
+          let brand = makeString("an incredibly poggers bot")
+          let pack = Buffer.concat([ident,brand])
+          socket.write(makePacket(0x02,pack,socket))
+          // write client information
+          let locale = makeString("en_US")
+          let viewdist = Buffer.from([0x04])
+          let chatMode = Buffer.from([0x00])
+          let chatColors = Buffer.from([0x01])
+          let skinParts = Buffer.from([0x00])
+          let mainHand = Buffer.from([0x00])
+          let textFilter = Buffer.from([0x00])
+          let serverListings = Buffer.from([0x01])
+          let particleStatus = Buffer.from([0x02])
+          pack = Buffer.concat(
+            [locale,viewdist,chatMode,chatColors,skinParts,mainHand,textFilter,serverListings,particleStatus]
+          );
+          // console.log(pack)
+          socket.write(makePacket(0x00,pack,socket))
         } 
       }
-      if (id == 0x00) { 
-        //SHIT I GOT KICKED
-        let jsonvarint = readVarInt(darnt)
-        console.log("Disconnected: " + jsonvarint.data.toString())
+      if (socket.state == "configuration") {
+        if (id == 0x04) {
+          //Keep the connection alive ig
+          socket.write(makePacket(0x04,darnt,socket))
+        }
+        if (id == 0x0E) {
+          //Recieve known packs
+          console.log(darnt)
+          console.log(readVarInt(darnt))
+          // let str = readString(darnt)
+          // let str2 = readString(str.sliced)
+          // let str3 = readString(str2.sliced)
+          console.log(str)
+          console.log(str2)
+          console.log(str3)
+        }
       }
+
 
 
     });
