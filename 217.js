@@ -37,22 +37,15 @@ function encryptWithPublicKey(derBytes, data) {
   );
 }
 
-function createDecryptCipher(sharedSecret) {
-  return crypto.createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
-}
 
 function createDecryptor(sharedSecret) {
-  const cipher = require('crypto').createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
-  return function decrypt(buffer) {
-    return cipher.update(buffer); // returns decrypted Buffer
-  };
+  const decipher = crypto.createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
+  return (buffer) => Buffer.from(decipher.update(buffer));
 }
 
 function createEncryptor(sharedSecret) {
-  const cipher = require('crypto').createCipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
-  return function encrypt(buffer) {
-    return cipher.update(buffer); // returns encrypted Buffer
-  };
+  const cipher = crypto.createCipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
+  return (buffer) => Buffer.from(cipher.update(buffer));
 }
 
 
@@ -76,6 +69,7 @@ function makePacket(id,data,socket) {
     }
     dat = Buffer.concat([makeVarInt(dat.length),dat])
     if (socket.pk) {
+      console.log('encrypting packet')
       dat = socket.encrypt(dat)
     }
   } else {
@@ -219,11 +213,10 @@ function doink(ip, port, i, handshake, count, data, sockets) {
       let fdata
       if (socket.encrypted) {
         fdata = socket.decrypt(data)
-        // console.log(fdata)
+        console.log(fdata)
       } else {
         fdata = data
       }
-      console.log(fdata)
       if (socket.compression) {
         if (fdata.length < socket.compressionThresh) {
           // fdata = readVarInt(fdata).left
@@ -236,32 +229,8 @@ function doink(ip, port, i, handshake, count, data, sockets) {
       // console.log(varnt)
       let darnt = (fdata.slice(varnt.bytesRead + 1))
       let id = (fdata.slice(varnt.bytesRead)[0])
-      console.log(varnt)
       console.log(fdata);
       console.log("FULL " + id)
-
-      /*if (data[2] == 0x04) {
-        if (socket.state == "configuration") {
-          socket.write(data);
-        } else {
-          console.log("fix: " + socket.state);
-          socket.write(data);
-        }
-      }
-      if (data[2] == 0x69) {
-        console.log(data);
-      }
-      if (data[2] == 39 || data[2] == 26 || data[2] == 4) {
-        //if (socket.state == "play") console.log(data);
-        console.log("pls fix");
-        pack = data;
-        pack[2] = 0x18;
-        console.log(pack);
-        //socket.write(pack);
-        console.log("i need to revive me selfs");
-      }*/
-
-
 
 
       //Data with data length sliced off
@@ -285,7 +254,7 @@ function doink(ip, port, i, handshake, count, data, sockets) {
             console.log("Encrypting connection")
             sharedSecret = crypto.randomBytes(16)
             socket.decrypt = createDecryptor(sharedSecret)
-            socket.decrypt = createEncryptor(sharedSecret)
+            // socket.decrypt = createEncryptor(sharedSecret)
             socket.pk = pk
             socket.encrypted = true
             // console.log(pk)
