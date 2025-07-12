@@ -37,6 +37,9 @@ function encryptWithPublicKey(derBytes, data) {
   );
 }
 
+function inflate(buffer) {
+  return zlib.inflateSync(buffer); // or zlib.unzipSync(buffer) if unsure of format
+}
 
 function createDecryptor(sharedSecret) {
   const decipher = crypto.createDecipheriv('aes-128-cfb8', sharedSecret, sharedSecret);
@@ -68,11 +71,7 @@ function makePacket(id,data,socket,debug) {
       dat = Buffer.concat([makeVarInt(datlength),dat]) 
     }
     dat = Buffer.concat([makeVarInt(dat.length),dat])
-    if (debug) {
-      console.log(readVarInt(dat))
-    }
     if (socket.pk) {
-      // console.log('encrypting packet')
       dat = socket.encrypt(dat)
     }
   } else {
@@ -200,11 +199,14 @@ function main() {
   const handshake = Buffer.concat([Buffer.from([data.length]), data]);
 
   for (let i = 1; i <= count; i++) {
-    //setTimeout(() => {
-    doink(ip, port, i, handshake, count, data, sockets);
-    //}, 4 * i);
+    // setTimeout(() => {
+      doink(ip, port, i, handshake, count, data, sockets);
+    // }, 25 * i);
   }
 }
+
+let botCount = 1
+
 
 function doink(ip, port, i, handshake, count, data, sockets) {
   const nick = generateRandomString(8);
@@ -214,7 +216,8 @@ function doink(ip, port, i, handshake, count, data, sockets) {
     port: port,
   };
   try {
-    process.stdout.write(`\r[${i}/${count}] Connecting bot: ${nick}\n`);
+    process.stdout.write(`\r[${botCount}/${count}] Connecting bot: ${nick}`);
+    botCount++
     let socket = net.createConnection(options);
     sockets.push(socket);
 
@@ -239,20 +242,20 @@ function doink(ip, port, i, handshake, count, data, sockets) {
         fdata = data
       }
       if (socket.compression) {
-        if (fdata.length < socket.compressionThresh) {
+        fdata = readVarInt(fdata).data
+        if (fdata.length >= socket.compressionThresh) {
           fdata = readVarInt(fdata).left
-        } else {
-          console.log("Packet too big")
+          fdata = inflate(fdata)
+          fdata = Buffer.concat([Buffer.from([0x00]),fdata])
         }
       }
 
       let varnt = readVarInt(fdata)
-      // console.log(varnt)
       // before you ask, there isn't any reasoning for calling this varialble darnt
       let darnt = (fdata.slice(varnt.bytesRead + 1))
       let id = (fdata.slice(varnt.bytesRead)[0])
-      console.log(fdata);
-      console.log("FULL " + id)
+      // console.log(fdata);
+      // console.log("FULL " + id)
 
 
       //Data with data length sliced off
@@ -278,21 +281,16 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           if(sliced == 1){
             console.log("AUTHENTICATION REQUIRED, QUITTING")
           }else{
-            console.log("Encrypting connection")
+            // console.log("Encrypting connection")
             sharedSecret = crypto.randomBytes(16)
             socket.decrypt = createDecryptor(sharedSecret)
             socket.encrypt = createEncryptor(sharedSecret)
             socket.pk = pk
             socket.encrypted = true
-            // console.log(pk)
-            // console.log(sharedSecret)
-            // console.log(verifytkn)
             let secret = encryptWithPublicKey(pk,sharedSecret)
             let tkn = encryptWithPublicKey(pk,verifytkn)
             let pack = Buffer.concat([prefix(secret),prefix(tkn)])
-            // console.log(readVarInt(prefix(secret)))
             pack = makePacket(0x01,pack)
-            // console.log(readVarInt(pack))
             socket.write(pack)
           }
         }
@@ -300,7 +298,7 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           // Enable Compression
           socket.compressionThresh = readVarInt(darnt).value
           socket.compression = true
-          console.log("compressing past " + socket.compressionThresh + " bytes")
+          // console.log("compressing past " + socket.compressionThresh + " bytes")
         } 
         if (id == 0x02) {
           // Login Success
@@ -308,14 +306,14 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           let sliced = darnt.slice(16,darnt.length)
           let usernamevarint = readVarInt(sliced)
           socket.username = usernamevarint.data.toString()
-          console.log("logged in as: " + socket.username)
+          // console.log("logged in as: " + socket.username)
           //so were gonna ignore this for now
           let propertyvarint = readVarInt(usernamevarint.sliced)
           // console.log(propertyvarint)
           //write login acknowledgement
           socket.write(makePacket(0x03,null,socket))
           socket.state = "configuration"
-          console.log("switching to configuration")
+          // console.log("switching to configuration")
           // write plugin message (this includes your client brand apparently, minecraft, fabric, feather, etc)
           let ident = makeString("minecraft:brand")
           let brand = makeString("an incredibly poggers bot")
@@ -334,25 +332,46 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           pack = Buffer.concat(
             [locale,viewdist,chatMode,chatColors,skinParts,mainHand,textFilter,serverListings,particleStatus]
           );
-          // console.log(pack)
           socket.write(makePacket(0x00,pack,socket))
+          // write known packs i guess
+          socket.write(makePacket(0x07,Buffer.from([0x00]),socket))
         } 
       }
       if (socket.state == "configuration") {
+        if (id == 0x03) {
+          //Finish configuration/acknowledgement
+          socket.write(makePacket(0x03,null,socket))
+          // console.log("configuration completed")
+          socket.state = "play"
+        }
         if (id == 0x04) {
           //Keep the connection alive ig
           socket.write(makePacket(0x04,darnt,socket))
         }
         if (id == 0x0E) {
-          //Recieve known packs
-          console.log(darnt)
-          console.log(readVarInt(darnt))
+          //Recieve known packs, apparently this is unneccesary/useless!?!?!?! wtf
           // let str = readString(darnt)
-          // let str2 = readString(str.sliced)
-          // let str3 = readString(str2.sliced)
-          console.log(str)
-          console.log(str2)
-          console.log(str3)
+          // let entriesvarint = readVarInt(str.sliced)
+        }
+      }
+      if (socket.state == "play") {
+        // console.log(darnt)
+        // console.log("FULL " + id.toString(16).padStart(2,'0'))
+        if (id == 0x26) {
+          console.log(darnt)
+        }
+        if (id == 0x27) {
+          //Loads in player after chunk data has been sent
+          // socket.write(makePacket(0x2A,null,socket))
+        }
+        if (id == 0x41) {
+          //confirming teleportations
+          let tpvarint = readVarInt(darnt)
+          socket.write(makePacket(0x00,makeVarInt(tpvarint.value),socket))
+        }
+        if (id == 0x6F) {
+          //confirming teleportations
+          console.log("server hates me pog?")
         }
       }
 
@@ -368,7 +387,9 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           `\nsocket close because it's fucking stupid and ${res.message}`,
         );
       } else {
-        console.log(`\nsocket close because it's literally fucking stupid`);
+        process.stdout.write(`\r[${botCount}/${count}] Disconnected bot: ${socket.username}`);
+        botCount-=1
+        // console.log(`\nsocket close because it's literally fucking stupid`);
       }
     });
   } catch (e) {
