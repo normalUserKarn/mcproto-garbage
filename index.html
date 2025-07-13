@@ -16,9 +16,9 @@
   <div id="log3" class="log"></div>
 
   <script>
-    const logs = [[], [], [], []];
-    const elements = logs.map((_, i) => document.getElementById(`log${i}`));
-    const socket = io();
+    let logs = [[], [], [], []];
+    let elements = logs.map((_, i) => document.getElementById(`log${i}`));
+    let socket = io();
 
     socket.on('init', ({ index, lines }) => {
       logs[index] = lines;
@@ -30,6 +30,13 @@
       if (logs[index].length > 100) logs[index].shift();
       elements[index].textContent = logs[index].join('\n');
       elements[index].scrollTop = elements[index].scrollHeight;
+    });
+
+    socket.on('connect', () => {
+      for (let i = 0; i < logs.length; i++) {
+        logs[i] = [];
+        elements[i].textContent = '';
+      }
     });
   </script>
 </body>
