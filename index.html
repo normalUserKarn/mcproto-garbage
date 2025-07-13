@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Live Logs</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body { margin: 0; display: grid; grid-template-rows: repeat(4, 1fr); height: 100vh; font-family: monospace; background: #111; color: #0f0; }
+    .log { border-bottom: 1px solid #444; overflow-y: auto; padding: 5px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <div id="log0" class="log"></div>
+  <div id="log1" class="log"></div>
+  <div id="log2" class="log"></div>
+  <div id="log3" class="log"></div>
+
+  <script>
+    const logs = [[], [], [], []];
+    const elements = logs.map((_, i) => document.getElementById(`log${i}`));
+    const socket = io();
+
+    socket.on('init', ({ index, lines }) => {
+      logs[index] = lines;
+      elements[index].textContent = logs[index].join('\n');
+    });
+
+    socket.on('log', ({ index, line }) => {
+      logs[index].push(line);
+      if (logs[index].length > 100) logs[index].shift();
+      elements[index].textContent = logs[index].join('\n');
+      elements[index].scrollTop = elements[index].scrollHeight;
+    });
+  </script>
+</body>
+</html>
+

@@ -3,13 +3,129 @@ if (process.argv.length !== 5) {
   process.exit(1);
 }
 
+// Fixes errors with blessed
+process.env.TERM = 'xterm'
 const net = require("net");
-const http = require("http");
 const zlib = require("zlib");
 const crypto = require('crypto');
 const fs = require("fs");
-const { v4: uuidv4 } = require("uuid");
-const playerUUID = uuidv4();
+const util = require('util');
+const blessed = require('blessed');
+const { v4: uuidv4 } = require('uuid');
+const { translations } = require('./versioning.js');
+
+const express = require('express');
+const app = express();
+const http = require('http').createServer(app);
+const { Server } = require('socket.io');
+const io = new Server(http);
+const port = 3000;
+
+const logLines = [[], [], [], []];
+const MAX_LINES = 100;
+
+// Serve static HTML
+app.get('/', (req, res) => {
+  res.sendFile(__dirname + '/index.html');
+});
+
+// WebSocket for pushing logs live
+io.on('connection', (socket) => {
+  logLines.forEach((lines, i) => {
+    socket.emit('init', { index: i, lines });
+  });
+});
+
+function log(boxIndex, msg) {
+  const formatted = formatMsg(msg);
+  const lines = logLines[boxIndex];
+  lines.push(formatted);
+  if (lines.length > MAX_LINES) lines.shift();
+  io.emit('log', { index: boxIndex, line: formatted });
+}
+
+// Set or overwrite a specific line in a box
+function setLine(boxIndex, lineIndex, msg) {
+  const formatted = formatMsg(msg);
+  const lines = logLines[boxIndex];
+
+  // Fill in any missing lines
+  while (lines.length <= lineIndex) lines.push('');
+  lines[lineIndex] = formatted;
+
+  // Trim excess lines
+  if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+
+  io.emit('replace', { index: boxIndex, lines });
+}
+
+// Format any type
+function formatMsg(msg) {
+  if (Buffer.isBuffer(msg)) return util.inspect(msg);
+  if (typeof msg === 'object') {
+    try {
+      return JSON.stringify(msg, null, 2);
+    } catch {
+      return util.inspect(msg);
+    }
+  }
+  return String(msg);
+}function log(boxIndex, msg) {
+  const formatted = formatMsg(msg);
+  const lines = logLines[boxIndex];
+  lines.push(formatted);
+  if (lines.length > MAX_LINES) lines.shift();
+  io.emit('log', { index: boxIndex, line: formatted });
+}
+
+// Set or overwrite a specific line in a box
+function setLine(boxIndex, lineIndex, msg) {
+  const formatted = formatMsg(msg);
+  const lines = logLines[boxIndex];
+
+  // Fill in any missing lines
+  while (lines.length <= lineIndex) lines.push('');
+  lines[lineIndex] = formatted;
+
+  // Trim excess lines
+  if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
+
+  io.emit('replace', { index: boxIndex, lines });
+}
+
+// Format any type
+function formatMsg(msg) {
+  if (Buffer.isBuffer(msg)) return util.inspect(msg);
+  if (typeof msg === 'object') {
+    try {
+      return JSON.stringify(msg, null, 2);
+    } catch {
+      return util.inspect(msg);
+    }
+  }
+  return String(msg);
+}
+
+http.listen(port, () => {
+  console.log(`server running at http://localhost:${port}`);
+});
+
+
+// cleanup
+process.on('exit', () => {
+  process.stdout.write(`${ESC}[?25h`); // show cursor
+});
+process.on('SIGINT', () => process.exit());
+
+
+// function setLine(line,test){
+//   console.log(test)
+// }
+// function log(line,test){
+//   console.log(test)
+// }
+
+
 let agent;
 let request = [];
 
@@ -53,6 +169,8 @@ function createEncryptor(sharedSecret) {
 
 
 function makePacket(id,data,socket,debug) {
+  // log(1,"sent FULL " + id)
+  // log(2,data)
   let dat
   if (data) {
     dat = Buffer.concat([Buffer.from([id]),data])
@@ -66,7 +184,7 @@ function makePacket(id,data,socket,debug) {
         datlength = 0
       } else {
         datlength = dat.length
-        console.log("packet you tried to send was too big")
+        log(1,"packet you tried to send was too big")
       }
       dat = Buffer.concat([makeVarInt(datlength),dat]) 
     }
@@ -177,38 +295,30 @@ function generateRandomString(length) {
   return randomString;
 }
 
+const proto = 767;
+const sockets = [];
+const packet = translations[proto]
+
 function main() {
   const ip = process.argv[2];
   var port = parseInt(process.argv[3]);
   const count = parseInt(process.argv[4]);
 
-  const proto = 770;
-  const sockets = [];
-
   // Make handshake packet
-  let data = Buffer.from([0x00]);
-  // Add proto version
-  data = Buffer.concat([data, makeVarInt(proto)]);
-  // Add proto string
-  data = Buffer.concat([data, Buffer.from([ip.length]), Buffer.from(ip)]);
-  data = Buffer.concat([data, Buffer.alloc(2)]);
-  // Add port
-  data.writeInt16BE(port, data.length - 2);
-  // Set status Login
-  data = Buffer.concat([data, Buffer.from([0x02])]);
-  const handshake = Buffer.concat([Buffer.from([data.length]), data]);
+  let pack = Buffer.concat([makeVarInt(proto),makeString(ip),Buffer.from([port >> 8, port & 0xFF]),Buffer.from([0x02])])
+  const handshake = makePacket(0x00,pack)
 
   for (let i = 1; i <= count; i++) {
     // setTimeout(() => {
-      doink(ip, port, i, handshake, count, data, sockets);
-    // }, 25 * i);
+      doink(ip, port, i, handshake, count, sockets,"i ate an " + i);
+    // }, 250 * i);
   }
 }
 
 let botCount = 1
 
 
-function doink(ip, port, i, handshake, count, data, sockets) {
+function doink(ip, port, i, handshake, count, sockets,chatMsg) {
   const nick = generateRandomString(8);
 
   const options = {
@@ -216,23 +326,39 @@ function doink(ip, port, i, handshake, count, data, sockets) {
     port: port,
   };
   try {
-    process.stdout.write(`\r[${botCount}/${count}] Connecting bot: ${nick}`);
+    // process.stdout.write(`\r[${botCount}/${count}] Connecting bot: ${nick}`);
+    setLine(0,0,`\r[${botCount}/${count}] Connecting bot: ${nick}`)
     botCount++
     let socket = net.createConnection(options);
     sockets.push(socket);
-
+    socket.chatMsg = chatMsg
     // Send handshake packet
     socket.write(handshake);
 
     // Make login start packet
     socket.state = "login";
-    let data = Buffer.from([0x00]);
-    socket.compression = false;
-    data = Buffer.concat([data, Buffer.from([nick.length]), Buffer.from(nick)]);
-    data = Buffer.concat([data, Buffer.alloc(16)]);
-    data = Buffer.concat([Buffer.from([data.length]), data]);
-    socket.write(data);
-    //Success probably
+    let uuid = Buffer.from(require('uuid').v4().replace(/-/g, ''), 'hex');
+    // let uuid = Buffer.alloc(16)
+    socket.write(makePacket(0x00,Buffer.concat([makeString(nick),uuid])));
+    // Success probably
+    setInterval(function(){
+      if (socket.state == "play") {
+        //Sends chat message
+        let message = makeString(socket.chatMsg)
+        //In long format
+        let timestamp = Buffer.alloc(8)
+        let hasSig = Buffer.from([0x00])
+        let messageCount = makeVarInt(1)
+        //signing thing
+        let acknowledgement = Buffer.alloc(3)
+        let salt = Buffer.alloc(8)
+        let msg = Buffer.concat([
+          message,timestamp,hasSig,messageCount,acknowledgement,salt
+        ])
+        let packet = makePacket(0x06,msg,socket)
+        // socket.write(packet)
+      }
+    },1000)
     socket.on("data", (data) => {
 
       let fdata
@@ -254,17 +380,17 @@ function doink(ip, port, i, handshake, count, data, sockets) {
       // before you ask, there isn't any reasoning for calling this varialble darnt
       let darnt = (fdata.slice(varnt.bytesRead + 1))
       let id = (fdata.slice(varnt.bytesRead)[0])
-      // console.log(fdata);
-      // console.log("FULL " + id)
+      log(1,darnt)
+      log(1,i+": FULL " + id.toString(16).padStart(2,'0'))
 
 
       //Data with data length sliced off
-      // console.log(darnt)
+      // log(1,darnt)
       if (socket.state == "login") {
         if (id == 0x00) { 
           //SHIT I GOT KICKED
           let jsonvarint = readVarInt(darnt)
-          console.log("Disconnected during login: " + jsonvarint.data.toString())
+          log(1,"Disconnected during login: " + jsonvarint.data.toString())
         }
         if (id == 0x01) {
           // let decEnc = Buffer.from([0x02, 0x00, 0x01]);
@@ -277,11 +403,11 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           let verifytknvarint = readVarInt(sliced)
           let verifytkndat = verifytknvarint.left
           let verifytkn = verifytknvarint.data
-          // console.log(verifytknvarint.sliced)
+          // log(1,verifytknvarint.sliced)
           if(sliced == 1){
-            console.log("AUTHENTICATION REQUIRED, QUITTING")
+            log(1,"AUTHENTICATION REQUIRED, QUITTING")
           }else{
-            // console.log("Encrypting connection")
+            log(1,"Encrypting connection")
             sharedSecret = crypto.randomBytes(16)
             socket.decrypt = createDecryptor(sharedSecret)
             socket.encrypt = createEncryptor(sharedSecret)
@@ -298,7 +424,7 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           // Enable Compression
           socket.compressionThresh = readVarInt(darnt).value
           socket.compression = true
-          // console.log("compressing past " + socket.compressionThresh + " bytes")
+          // log(1,"compressing past " + socket.compressionThresh + " bytes")
         } 
         if (id == 0x02) {
           // Login Success
@@ -306,20 +432,15 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           let sliced = darnt.slice(16,darnt.length)
           let usernamevarint = readVarInt(sliced)
           socket.username = usernamevarint.data.toString()
-          // console.log("logged in as: " + socket.username)
+          // log(1,"logged in as: " + socket.username)
           //so were gonna ignore this for now
           let propertyvarint = readVarInt(usernamevarint.sliced)
-          // console.log(propertyvarint)
+          // log(1,propertyvarint)
           //write login acknowledgement
           socket.write(makePacket(0x03,null,socket))
           socket.state = "configuration"
-          // console.log("switching to configuration")
-          // write plugin message (this includes your client brand apparently, minecraft, fabric, feather, etc)
-          let ident = makeString("minecraft:brand")
-          let brand = makeString("an incredibly poggers bot")
-          let pack = Buffer.concat([ident,brand])
-          socket.write(makePacket(0x02,pack,socket))
-          // write client information
+          log(1,"switching to configuration")
+
           let locale = makeString("en_US")
           let viewdist = Buffer.from([0x04])
           let chatMode = Buffer.from([0x00])
@@ -329,72 +450,151 @@ function doink(ip, port, i, handshake, count, data, sockets) {
           let textFilter = Buffer.from([0x00])
           let serverListings = Buffer.from([0x01])
           let particleStatus = Buffer.from([0x02])
-          pack = Buffer.concat(
-            [locale,viewdist,chatMode,chatColors,skinParts,mainHand,textFilter,serverListings,particleStatus]
-          );
-          socket.write(makePacket(0x00,pack,socket))
-          // write known packs i guess
+          if (proto == 767) {
+            pack = Buffer.concat(
+              [locale,viewdist,chatMode,chatColors,skinParts,mainHand,textFilter,serverListings]
+            );
+          }
+          if (proto == 770) {
+            pack = Buffer.concat(
+              [locale,viewdist,chatMode,chatColors,skinParts,mainHand,textFilter,serverListings,particleStatus]
+            );
+          }
+          // write client information
+          // socket.write(makePacket(0x00,pack,socket))
+          // write plugin message (this includes your client brand apparently, minecraft, fabric, feather, etc)
+          let ident = makeString("minecraft:brand")
+          let brand = makeString("poggersclient")
+          // socket.write(makePacket(0x02,Buffer.concat([ident,brand]),socket))
+          // write known packs i guess, the zero is to say that the pack length is zero
           socket.write(makePacket(0x07,Buffer.from([0x00]),socket))
+
+
         } 
-      }
-      if (socket.state == "configuration") {
+      } else if (socket.state == "configuration") {
+        if (id == 0x02) { 
+          //SHIT I GOT KICKED
+          let jsonvarint = readVarInt(darnt)
+          // log(2,readVarInt(darnt))
+          // log(2,(fdata))
+          log(1,"Disconnected during configuration: " + darnt.slice(8).toString())
+          // log(1,jsonvarint.data)
+        }
+        if (id == 0x05) {
+          // Detect and respond to pings with a pong
+          socket.write(makePacket(0x05,darnt,socket))
+        }
         if (id == 0x03) {
           //Finish configuration/acknowledgement
           socket.write(makePacket(0x03,null,socket))
-          // console.log("configuration completed")
+          // log(1,"configuration completed")
           socket.state = "play"
         }
         if (id == 0x04) {
           //Keep the connection alive ig
           socket.write(makePacket(0x04,darnt,socket))
         }
+        if (id == 0x07) {
+          // Read the registry data -- BORKED
+          // let identifier = readString(darnt).string
+          // log(2,identifier)
+          // let datavarint = readVarInt(readString(darnt).sliced)
+          // let legth = datavarint.value
+          // log(2,legth)
+          // datavarint = datavarint.left
+          // for ( let xx=0; xx<legth; xx++ ) {
+          //   log(2,datavarint)
+          //   ident = readString(datavarint)
+          //   log(2,ident.string)
+          //   datavarint = ident.sliced.slice(1)
+          //   nbt = readString(datavarint)
+          //   log(2,nbt.string)
+          //   datavarint = nbt.sliced
+          //   // datavarint = { sliced: "egg"}
+          //   legth = 2
+          // }
+        }
+        if (id == 0x01) {
+
+        }
         if (id == 0x0E) {
           //Recieve known packs, apparently this is unneccesary/useless!?!?!?! wtf
           // let str = readString(darnt)
           // let entriesvarint = readVarInt(str.sliced)
+
         }
-      }
-      if (socket.state == "play") {
-        // console.log(darnt)
-        // console.log("FULL " + id.toString(16).padStart(2,'0'))
+      } else if (socket.state == "play") {
+        // log(1,darnt)
+        // log(1,"FULL " + id.toString(16).padStart(2,'0'))
+        if (id == 0x1D) { 
+          //SHIT I GOT KICKED
+          let jsonvarint = readVarInt(darnt)
+          log(3,"jsonvarint")
+          log(3,"Disconnected: " + jsonvarint.data.toString())
+        }
         if (id == 0x26) {
-          console.log(darnt)
+          // log(3,darnt)
+          socket.write(makePacket(0x18,darnt,socket))
         }
         if (id == 0x27) {
           //Loads in player after chunk data has been sent
+          //not in 1.21.1
           // socket.write(makePacket(0x2A,null,socket))
         }
-        if (id == 0x41) {
+        if (id == packet.p.c.player_position) {
           //confirming teleportations
           let tpvarint = readVarInt(darnt)
-          socket.write(makePacket(0x00,makeVarInt(tpvarint.value),socket))
+          log(3,'confirmed tp')
+          log(3,tpvarint.value)
+          socket.write(makePacket(packet.p.s.accept_teleportation,makeVarInt(tpvarint.value),socket))
+        }
+        if (id == 0x39) {
+          //Reading player chats
+          let indexvarint = readVarInt(darnt.slice(16))
+          let isSignature = indexvarint.left.slice(0,1)
+          let nextvarint = readVarInt(indexvarint.left.slice(1))
+          if (isSignature == 1) {
+            sigvarint = readVarInt(indexvarint.left.slice(1))
+            log(2,sigvarint.toString())
+            signature = indexvarint.left.slice(1)
+            nextvarint = readVarInt(sigvarint.sliced)
+            log(2,"there is signature")
+          }
+          // message = readString(nextvarint.data)
+        }
+        if (id == 0x6C) {
+          //Reading system chats
+          log(2,"thingy appeared")
+          log(2,readString(darnt).string)
         }
         if (id == 0x6F) {
           //confirming teleportations
-          console.log("server hates me pog?")
+          log(3,"server hates me pog?")
         }
+
       }
 
 
 
     });
     socket.on("error", (err) => {
-      console.error(`Error connecting bot ${i}: ${err.message}`);
+      log(0,`Error connecting bot ${i}: ${err.message}`);
     });
     socket.on("close", (res) => {
       if (res) {
-        console.log(
+        log(1,
           `\nsocket close because it's fucking stupid and ${res.message}`,
         );
       } else {
-        process.stdout.write(`\r[${botCount}/${count}] Disconnected bot: ${socket.username}`);
         botCount-=1
-        // console.log(`\nsocket close because it's literally fucking stupid`);
+        // process.stdout.write(`\r[${botCount}/${count}] Disconnected bot: ${socket.username}`);
+        setLine(0,0,`\r[${botCount}/${count}] Disconnected bot: ${socket.username}`)
+        // log(1,`\nsocket close because it's literally fucking stupid`);
       }
     });
   } catch (e) {
-    console.error(
-      `Error with bot ${i}: Failed to create SOCKS connection: ${e.message}`,
+    log(0,
+      `Error with bot ${i}: Failed to connect: ${e.message}`,
     );
   }
 }

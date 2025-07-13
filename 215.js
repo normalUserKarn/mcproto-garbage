@@ -1,3 +1,4 @@
+//this file kinda works... but its old and lame
 if (process.argv.length !== 5) {
   console.log(`Usage: node ${process.argv[1]} <ip> <port> <count>`);
   process.exit(1);
