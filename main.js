@@ -3,8 +3,6 @@ if (process.argv.length !== 5) {
   process.exit(1);
 }
 
-// Fixes errors with blessed
-process.env.TERM = 'xterm'
 const net = require("net");
 const fs = require("fs");
 const util = require('util');
