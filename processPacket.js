@@ -1,42 +1,57 @@
 const { translations } = require('./versioning.js');
+const crypto = require('crypto');
 
-function processPacket(data,socket) {
-  const packet = translations[socket.proto]
-  let reprocess = false
+function processPacket(data,socket,disableEncryption) {
   let fdata
-  if (socket.encrypted) {
+  if (socket.encrypted && !disableEncryption) {
     fdata = socket.decrypt(data)
   } else {
     fdata = data
   }
-  let prevarnt = readVarInt(fdata)
-
-  // this fucking pain in the ass!!!!!!!!!!!!!!!, this exists to splice out the zero from uncompressed data and support minecraft fucking giving me two packets at a time AGGAHGAHHGAHGAHGH
-  if (prevarnt.sliced.length > 0) {
-    reprocess = true
-    fdata = Buffer.concat([makeVarInt(prevarnt.value),prevarnt.data])
+  let prevarnt = {}
+  if (socket.tmp.length > 0) {
+    prevarnt.left = Buffer.concat([socket.tmp,fdata])
+    prevarnt.value = socket.tmpMax 
+    prevarnt.data = prevarnt.slice(0,prevarnt.value)
+  } else {
+    prevarnt = readVarInt(fdata)
   }
-  if (socket.compression) {
-    let fdatavarint = readVarInt(fdata)
-    fdata = fdatavarint.data
-    if (fdata.length >= socket.compressionThresh) {
-      fdata = readVarInt(fdata).data
-      fdata = inflate(fdata)
-      // fdata = Buffer.concat([data[0],fdata])
-    } else {
-      fdata = Buffer.concat([makeVarInt(fdata.length - 1),fdata.slice(1)])
+  if (prevarnt.left.length < prevarnt.value) {
+    socket.tmp = prevarnt.left
+    socket.tmpMax = prevarnt.value
+  } else {
+    processCmd(prevarnt.data,socket)
+    if (prevarnt.sliced.length > 0) {
+      socket.tmp = Buffer.from([])
+      processPacket(prevarnt.sliced,socket,true)
     }
   }
+}
+function processCmd(fdata,socket) {
+
+  const packet = translations[socket.proto]
+  // this fucking pain in the ass!!!!!!!!!!!!!!!, this exists to splice out the zero from uncompressed data and support minecraft fucking giving me two packets at a time AGGAHGAHHGAHGAHGH
+  if (socket.compression) {
+    let fdatavarint = readVarInt(fdata)
+    fdata = fdatavarint.left
+    if (fdatavarint.value >= socket.compressionThresh) {
+      // fdata = readVarInt(fdata).left
+      fdata = inflate(fdata)
+      // fdata = Buffer.concat([data[0],fdata])
+    } // else {
+      // fdata = Buffer.concat([makeVarInt(fdata.length - 1),fdata.slice(1)])
+    // }
+  }
+  // console.log(fdata)
 
 
-  let varnt = readVarInt(fdata)
   // before you ask, there isn't any reasoning for calling this varialble darnt
-  let darnt = (varnt.data.slice(1))
-  let id = (varnt.data[0])
-  if (socket.state != "play") {
+  let darnt = (fdata.slice(1))
+  let id = (fdata[0])
+  // if (socket.state == "play") {
     log(1,fdata)
     log(1,socket.id+": FULL " + id.toString(16).padStart(2,'0'))
-  }
+  // }
 
 
   if (socket.state == "login") {
@@ -67,7 +82,7 @@ function processPacket(data,socket) {
         socket.pk = pk
         socket.encrypted = true
         let secret = encryptWithPublicKey(pk,sharedSecret)
-        let tkn = encryptWithPublicKey(pk,verifytkn)
+       let tkn = encryptWithPublicKey(pk,verifytkn)
         let pack = Buffer.concat([prefix(secret),prefix(tkn)])
         pack = makePacket(0x01,pack)
         socket.write(pack)
@@ -93,11 +108,6 @@ function processPacket(data,socket) {
       socket.write(makePacket(0x03,null,socket))
       socket.state = "configuration"
       log(1,"switching to configuration")
-
-      // write known packs i guess, the zero is to say that the pack length is zero
-      socket.write(makePacket(0x07,Buffer.from([0x00]),socket))
-
-
     } 
   } else if (socket.state == "configuration") {
     if (id == 0x02) { 
@@ -110,6 +120,7 @@ function processPacket(data,socket) {
     }
     if (id == 0x05) {
       // Detect and respond to pings with a pong
+      // log(2,darnt)
       socket.write(makePacket(0x05,darnt,socket))
     }
     if (id == 0x03) {
@@ -117,6 +128,7 @@ function processPacket(data,socket) {
       socket.write(makePacket(0x03,null,socket))
       // log(1,"configuration completed")
       socket.state = "play"
+      triggerPlayHook(socket)
     }
     if (id == 0x04) {
       //Keep the connection alive ig
@@ -169,60 +181,76 @@ function processPacket(data,socket) {
       let brand = makeString("poggersclient")
       socket.write(makePacket(0x02,Buffer.concat([ident,brand]),socket))
     }
+    if (id == 0x0A) { 
+      // Consume all of the cookies
+      // socket.write(makePacket(0x01,darnt,socket))
+      log(1,"ate a cookie")
+    }
     if (id == 0x0E) {
       //Recieve known packs, apparently this is unneccesary/useless!?!?!?! wtf
       // let str = readString(darnt)
       // let entriesvarint = readVarInt(str.sliced)
+      // write known packs i guess, the zero is to say that the pack length is zero
+      socket.write(makePacket(0x07,Buffer.from([0x00]),socket))
 
     }
   } else if (socket.state == "play") {
-    if (id == 0x1D) { 
+    if (id == packet.p.c.disconnect) { 
       //SHIT I GOT KICKED
       let jsonvarint = readVarInt(darnt)
+      //TODO make a text component reader >:
       log(3,"jsonvarint")
-      log(3,"Disconnected: " + jsonvarint.data.toString())
+      log(3,"Disconnected: " + jsonvarint.left.toString())
     }
-    if (id == 0x26) {
-      log(3,darnt)
-      socket.write(makePacket(0x18,darnt,socket))
-    }
-    if (id == 0x27) {
-      //Loads in player after chunk data has been sent
-      //not in 1.21.1
-      // socket.write(makePacket(0x2A,null,socket))
+    if (id == packet.p.c.keep_alive) {
+      //Returns kepp alive id
+      socket.write(makePacket(packet.p.s.keep_alive,darnt,socket))
     }
     if (id == packet.p.c.player_position) {
       //confirming teleportations
       let tpvarint = readVarInt(darnt)
       log(3,'confirmed tp')
-      log(3,tpvarint.value)
       socket.write(makePacket(packet.p.s.accept_teleportation,makeVarInt(tpvarint.value),socket))
     }
+    if (id == 0x1E) {
+      //Reading disguised chats
+      // log(2,'disguised chat recvd')
+      // let message = readString(darnt)
+      // log(2,message.string)
+      // let chatType = readVarInt(message.sliced)
+      // log(2,chatType)
+      // let sender = readString(chatType.left)
+      // log(2,sender.string)
+    }
     if (id == 0x39) {
+      // WARNING CHANGED IN 1.21.5
       //Reading player chats
-      let indexvarint = readVarInt(darnt.slice(16))
-      let isSignature = indexvarint.left.slice(0,1)
-      let nextvarint = readVarInt(indexvarint.left.slice(1))
-      if (isSignature == 1) {
-        sigvarint = readVarInt(indexvarint.left.slice(1))
-        log(2,sigvarint.toString())
-        signature = indexvarint.left.slice(1)
-        nextvarint = readVarInt(sigvarint.sliced)
-        log(2,"there is signature")
-      }
+      // log(2,'chat recvd')
+      // let indexvarint = readVarInt(darnt.slice(16))
+      // let isSignature = indexvarint.left.slice(0,1)
+      // let nextvarint = readVarInt(indexvarint.left.slice(1))
+      // if (isSignature == 1) {
+      //   sigvarint = readVarInt(indexvarint.left.slice(1))
+      //   log(2,sigvarint.toString())
+      //   signature = indexvarint.left.slice(1)
+      //   nextvarint = readVarInt(sigvarint.sliced)
+      //   log(2,"there is signature")
+      // }
       // message = readString(nextvarint.data)
     }
     if (id == 0x6C) {
+      // WARNING CHANGED IN 1.21.5
       //Reading system chats
       log(2,"thingy appeared")
-      log(2,readString(darnt).string)
+      // log(2,readString(darnt).string)
     }
     if (id == 0x6F) {
+      // WARNING CHANGED IN 1.21.5
       //confirming teleportations
       log(3,"server hates me pog?")
     }
 
   }
-  if (reprocess) processPacket(prevarnt.sliced,socket)
+  // if (reprocess) processPacket(prevarnt.sliced,socket)
 }
 module.exports = { processPacket };

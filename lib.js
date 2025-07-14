@@ -2,6 +2,7 @@ const logLines = [[], [], [], []];
 const MAX_LINES = 100;
 
 const zlib = require("zlib");
+const crypto = require('crypto');
 const util = require('util');
 const express = require('express');
 const app = express();

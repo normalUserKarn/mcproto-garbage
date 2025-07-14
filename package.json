@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "express": "^5.1.0",
+    "minecraft-data": "^3.93.0",
     "socket": "^1.0.50",
     "socket.io": "^4.8.1",
     "tui": "^1.0.0"

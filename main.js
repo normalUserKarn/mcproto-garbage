@@ -6,17 +6,15 @@ if (process.argv.length !== 5) {
 // Fixes errors with blessed
 process.env.TERM = 'xterm'
 const net = require("net");
-const crypto = require('crypto');
 const fs = require("fs");
 const util = require('util');
 const { v4: uuidv4 } = require('uuid');
 const { processPacket } = require('./processPacket.js');
-
-// Serve static HTML
-
+const { translations } = require('./versioning.js');
+Object.assign(global, require('./hooks.js'));
 Object.assign(global, require('./lib.js'));
 
-const proto = 767;
+const proto = 770;
 const sockets = [];
 
 function main() {
@@ -47,8 +45,10 @@ function doink(ip, port, i, count, sockets,chatMsg) {
     let socket = net.createConnection(options);
     sockets.push(socket);
     socket.id = i
+    socket.tmp = Buffer.from([])
     socket.proto = proto
     socket.chatMsg = chatMsg
+    const packet = translations[socket.proto]
     // Make handshake packet
     let handshake = makePacket(
       0x00,Buffer.concat([makeVarInt(proto),makeString(ip),Buffer.from([port >> 8, port & 0xFF]),Buffer.from([0x02])])
@@ -64,17 +64,26 @@ function doink(ip, port, i, count, sockets,chatMsg) {
       if (socket.state == "play") {
         let message = makeString(socket.chatMsg)
         let timestamp = Buffer.alloc(8)
-        let hasSig = Buffer.from([0x00])
-        let messageCount = makeVarInt(1)
-        let acknowledgement = Buffer.alloc(3)
         let salt = Buffer.alloc(8)
-        let msg = Buffer.concat([
-          message,timestamp,hasSig,messageCount,acknowledgement,salt
-        ])
-        let packet = makePacket(0x06,msg,socket)
-        socket.write(packet)
+        let hasSig = Buffer.from([0x00])
+        let messageCount = makeVarInt(0)
+        let acknowledgement = Buffer.alloc(3)
+        let checksum = Buffer.from([0x00])
+        let msg
+        if ( socket.proto == 767 ) {
+          msg = Buffer.concat([
+            message,timestamp,hasSig,messageCount,acknowledgement,salt
+          ])
+        }
+        if ( socket.proto == 770 ) {
+          msg = Buffer.concat([
+            message,timestamp,salt,hasSig,messageCount,acknowledgement,checksum
+          ])
+        }
+        let packt = makePacket(packet.p.s.chat,msg,socket)
+        socket.write(packt)
       }
-    },10000)
+    },1000)
     socket.on("data", (data) => {
 
       processPacket(data,socket)

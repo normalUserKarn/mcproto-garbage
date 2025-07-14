@@ -15,10 +15,13 @@
   <div id="log2" class="log"></div>
   <div id="log3" class="log"></div>
 
-  <script>
-    let logs = [[], [], [], []];
-    let elements = logs.map((_, i) => document.getElementById(`log${i}`));
-    let socket = io();
+<script>
+  let logs = [[], [], [], []];
+  let elements = logs.map((_, i) => document.getElementById(`log${i}`));
+  let socket;
+
+  function connectSocket() {
+    socket = io({ reconnection: false });
 
     socket.on('init', ({ index, lines }) => {
       logs[index] = lines;
@@ -37,8 +40,33 @@
         logs[i] = [];
         elements[i].textContent = '';
       }
+      console.log("Connected");
     });
-  </script>
+
+    socket.on('disconnect', () => {
+      console.log("Disconnected, retrying in 2 seconds...");
+      retryConnect();
+    });
+
+    socket.on('connect_error', () => {
+      console.log("Connection failed, retrying in 2 seconds...");
+      retryConnect();
+    });
+  }
+
+  let retryTimeout = null;
+  function retryConnect() {
+    if (retryTimeout) return; 
+    retryTimeout = setTimeout(() => {
+      retryTimeout = null;
+      connectSocket();
+    }, 50);
+  }
+
+  connectSocket();
+</script>
+
+
 </body>
 </html>
 
