@@ -4,65 +4,56 @@ const MAX_LINES = 100;
 const zlib = require("zlib");
 const crypto = require('crypto');
 const util = require('util');
-const express = require('express');
-const app = express();
-const http = require('http').createServer(app);
-const { Server } = require('socket.io');
-const io = new Server(http);
+const http = require('http')
+const fs = require('fs')
+const path = require('path');
+const { WebSocketServer, WebSocket } = require('ws')
+
 const port = 3000;
 
-
-
-app.get('/', (req, res) => {
-  res.sendFile(__dirname + '/index.html');
+const server = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/') {
+    const filePath = path.join(__dirname, 'index.html');
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        res.writeHead(500);
+        res.end('Error loading index.html');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(data);
+    });
+  } else {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
 });
 
-// WebSocket for pushing logs live
-io.on('connection', (socket) => {
+const wss = new WebSocketServer({ server });
+
+wss.on('connection', (ws) => {
+  // Send initial logLines data to client
   logLines.forEach((lines, i) => {
-    socket.emit('init', { index: i, lines });
+    ws.send(JSON.stringify({ event: 'init', data: { index: i, lines } }));
   });
+
+  // ws.on('message', (message) => {
+    // handle messages from clients
+  // });
 });
 
-http.listen(port, () => {
+server.listen(port, () => {
   console.log(`server running at http://localhost:${port}`);
 });
 
 
-module.exports.log = function(boxIndex, msg) {
-  const formatted = formatMsg(msg);
-  const lines = logLines[boxIndex];
-  lines.push(formatted);
-  if (lines.length > MAX_LINES) lines.shift();
-  io.emit('log', { index: boxIndex, line: formatted });
-}
-
-// Set or overwrite a specific line in a box
-module.exports.setLine = function(boxIndex, lineIndex, msg) {
-  const formatted = formatMsg(msg);
-  const lines = logLines[boxIndex];
-
-  // Fill in any missing lines
-  while (lines.length <= lineIndex) lines.push('');
-  lines[lineIndex] = formatted;
-
-  // Trim excess lines
-  if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
-
-  io.emit('replace', { index: boxIndex, lines });
-}
-
-// Format any type
-module.exports.formatMsg = function(msg) {
-  if (Buffer.isBuffer(msg)) return util.inspect(msg);
-  if (typeof msg === 'object') {
-    try {
-      return JSON.stringify(msg, null, 2);
-    } catch {
-      return util.inspect(msg);
+function broadcast(wss, event, data) {
+  const message = JSON.stringify({ event, data });
+  wss.clients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
     }
-  }
-  return String(msg);
+  });
 }
 
 module.exports.log = function(boxIndex, msg) {
@@ -70,7 +61,7 @@ module.exports.log = function(boxIndex, msg) {
   const lines = logLines[boxIndex];
   lines.push(formatted);
   if (lines.length > MAX_LINES) lines.shift();
-  io.emit('log', { index: boxIndex, line: formatted });
+  broadcast(wss, 'log', { index: boxIndex, line: formatted });
 }
 
 // Set or overwrite a specific line in a box
@@ -85,7 +76,7 @@ module.exports.setLine = function(boxIndex, lineIndex, msg) {
   // Trim excess lines
   if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES);
 
-  io.emit('replace', { index: boxIndex, lines });
+  broadcast(wss, 'replace', { index: boxIndex, lines });
 }
 
 // Format any type

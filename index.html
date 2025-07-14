@@ -3,7 +3,6 @@
 <head>
   <meta charset="UTF-8">
   <title>Live Logs</title>
-  <script src="/socket.io/socket.io.js"></script>
   <style>
     body { margin: 0; display: grid; grid-template-rows: repeat(4, 1fr); height: 100vh; font-family: monospace; background: #111; color: #0f0; }
     .log { border-bottom: 1px solid #444; overflow-y: auto; padding: 5px; white-space: pre-wrap; }
@@ -16,54 +15,49 @@
   <div id="log3" class="log"></div>
 
 <script>
-  let logs = [[], [], [], []];
-  let elements = logs.map((_, i) => document.getElementById(`log${i}`));
-  let socket;
+let logs = [[], [], [], []];
+let elements = logs.map((_, i) => document.getElementById(`log${i}`));
+let socket;
 
-  function connectSocket() {
-    socket = io({ reconnection: false });
+function connectSocket() {
+  socket = new WebSocket('ws://localhost:3000');
 
-    socket.on('init', ({ index, lines }) => {
-      logs[index] = lines;
-      elements[index].textContent = logs[index].join('\n');
-    });
+  socket.onopen = () => {
+    for (let i = 0; i < logs.length; i++) {
+      logs[i] = [];
+      elements[i].textContent = '';
+    }
+    console.log("Connected");
+  };
 
-    socket.on('log', ({ index, line }) => {
-      logs[index].push(line);
-      if (logs[index].length > 100) logs[index].shift();
-      elements[index].textContent = logs[index].join('\n');
-      elements[index].scrollTop = elements[index].scrollHeight;
-    });
+  socket.onmessage = (event) => {
+    const { event: evt, data } = JSON.parse(event.data);
+    if (evt === 'init') {
+      logs[data.index] = data.lines;
+      elements[data.index].textContent = logs[data.index].join('\n');
+    } else if (evt === 'log') {
+      logs[data.index].push(data.line);
+      if (logs[data.index].length > 100) logs[data.index].shift();
+      elements[data.index].textContent = logs[data.index].join('\n');
+      elements[data.index].scrollTop = elements[data.index].scrollHeight;
+    }
+  };
 
-    socket.on('connect', () => {
-      for (let i = 0; i < logs.length; i++) {
-        logs[i] = [];
-        elements[i].textContent = '';
-      }
-      console.log("Connected");
-    });
+  socket.onclose = () => retryConnect();
+  socket.onerror = () => retryConnect();
+}
 
-    socket.on('disconnect', () => {
-      console.log("Disconnected, retrying in 2 seconds...");
-      retryConnect();
-    });
+let retryTimeout = null;
+function retryConnect() {
+  if (retryTimeout) return;
+  retryTimeout = setTimeout(() => {
+    retryTimeout = null;
+    connectSocket();
+  }, 50);
+}
 
-    socket.on('connect_error', () => {
-      console.log("Connection failed, retrying in 2 seconds...");
-      retryConnect();
-    });
-  }
+connectSocket();
 
-  let retryTimeout = null;
-  function retryConnect() {
-    if (retryTimeout) return; 
-    retryTimeout = setTimeout(() => {
-      retryTimeout = null;
-      connectSocket();
-    }, 50);
-  }
-
-  connectSocket();
 </script>
 
 
