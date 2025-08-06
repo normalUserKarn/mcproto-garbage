@@ -1,53 +1,18 @@
-const logLines = [[], [], [], []];
-const MAX_LINES = 100;
+let logLines = [[], [], [], []];
+module.exports.logLines = logLines
+const MAX_LINES = 1000;
 
 const zlib = require("zlib");
 const crypto = require('crypto');
 const util = require('util');
-const http = require('http')
-const fs = require('fs')
-const path = require('path');
-const { WebSocketServer, WebSocket } = require('ws')
+const { WebSocket } = require('ws')
 
-const port = 3000;
+module.exports.clearLog = function(boxIndex) {
+  logLines[boxIndex] = [];
+  broadcast(wss, 'clear', { index: boxIndex });
+}
 
-const server = http.createServer((req, res) => {
-  if (req.method === 'GET' && req.url === '/') {
-    const filePath = path.join(__dirname, 'index.html');
-    fs.readFile(filePath, (err, data) => {
-      if (err) {
-        res.writeHead(500);
-        res.end('Error loading index.html');
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'text/html' });
-      res.end(data);
-    });
-  } else {
-    res.writeHead(404);
-    res.end('Not Found');
-  }
-});
-
-const wss = new WebSocketServer({ server });
-
-wss.on('connection', (ws) => {
-  // Send initial logLines data to client
-  logLines.forEach((lines, i) => {
-    ws.send(JSON.stringify({ event: 'init', data: { index: i, lines } }));
-  });
-
-  // ws.on('message', (message) => {
-    // handle messages from clients
-  // });
-});
-
-server.listen(port, () => {
-  console.log(`server running at http://localhost:${port}`);
-});
-
-
-function broadcast(wss, event, data) {
+module.exports.broadcast = function(wss, event, data) {
   const message = JSON.stringify({ event, data });
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {

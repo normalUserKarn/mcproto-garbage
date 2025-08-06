@@ -1,66 +1,230 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Live Logs</title>
-  <style>
-    body { margin: 0; display: grid; grid-template-rows: repeat(4, 1fr); height: 100vh; font-family: monospace; background: #111; color: #0f0; }
-    .log { border-bottom: 1px solid #444; overflow-y: auto; padding: 5px; white-space: pre-wrap; }
-  </style>
+<meta charset="UTF-8" />
+<title>Live Logs with Resizable Panels</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: #111;
+    color: #0f0;
+    font-family: monospace;
+    position: relative;
+  }
+  body {
+    display: grid;
+    grid-template-rows:
+      60px /* log0 initial */
+      5px   /* resizer */
+      1fr   /* log1 */
+      5px
+      1fr   /* log2 */
+      5px
+      1fr   /* log3 */
+    ;
+    height: 100vh;
+    user-select: none;
+  }
+  #controls {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    background: #222;
+    border: 1px solid #0f0;
+    padding: 8px 12px;
+    z-index: 1000;
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    color: #0f0;
+  }
+  #controls input {
+    background: #111;
+    border: 1px solid #0f0;
+    color: #0f0;
+    width: 80px;
+    padding: 2px 4px;
+    font-family: monospace;
+    font-size: 14px;
+  }
+  #reconnect-btn {
+    background: #222;
+    color: #0f0;
+    border: 1px solid #0f0;
+    padding: 6px 12px;
+    cursor: pointer;
+    user-select: none;
+    font-family: monospace;
+    font-size: 14px;
+  }
+  #reconnect-btn:hover {
+    background: #0f0;
+    color: #111;
+  }
+  .log {
+    overflow-y: auto;
+    padding: 5px;
+    white-space: pre-wrap;
+    border-bottom: 1px solid #444;
+  }
+  .resizer {
+    background: #333;
+    cursor: row-resize;
+  }
+  /* 
+  yeah idiot im not making this work for chrome, but it does look really sick on zen browser \
+  https://zen-browser.app 
+  */
+  input[type=number] {
+    -moz-appearance: textfield;
+  }
+</style>
 </head>
 <body>
+  <div id="controls">
+    <input id="ip" type="text" placeholder="IP" value="localhost" />
+    <input id="port" type="number" placeholder="Port" value="25565" min="1" max="65535" />
+    <input id="count" type="number" placeholder="Count" value="1" min="0" max="10000" />
+    <input id="interval" type="number" placeholder="Interval" value="0" min="0" />
+    <button id="reconnect-btn">Restart</button>
+  </div>
+
   <div id="log0" class="log"></div>
+  <div class="resizer" data-resize="log0"></div>
+
   <div id="log1" class="log"></div>
+  <div class="resizer" data-resize="log1"></div>
+
   <div id="log2" class="log"></div>
+  <div class="resizer" data-resize="log2"></div>
+
   <div id="log3" class="log"></div>
 
 <script>
-let logs = [[], [], [], []];
-let elements = logs.map((_, i) => document.getElementById(`log${i}`));
-let socket;
+  let logs = [[], [], [], []];
+  let elements = logs.map((_, i) => document.getElementById(`log${i}`));
+  let socket;
 
-function connectSocket() {
-  socket = new WebSocket('ws://localhost:3000');
+  function connectSocket() {
+    socket = new WebSocket('ws://localhost:3000');
 
-  socket.onopen = () => {
-    for (let i = 0; i < logs.length; i++) {
-      logs[i] = [];
-      elements[i].textContent = '';
-    }
-    console.log("Connected");
+    socket.onopen = () => {
+      for (let i = 0; i < logs.length; i++) {
+        logs[i] = [];
+        elements[i].textContent = '';
+      }
+      console.log("Connected");
+    };
+
+    socket.onmessage = (event) => {
+      const { event: evt, data } = JSON.parse(event.data);
+      if (evt === 'init') {
+        logs[data.index] = data.lines;
+        elements[data.index].textContent = logs[data.index].join('\n');
+      } else if (evt === 'log') {
+        logs[data.index].push(data.line);
+        if (logs[data.index].length > 100) logs[data.index].shift();
+        elements[data.index].textContent = logs[data.index].join('\n');
+        elements[data.index].scrollTop = elements[data.index].scrollHeight;
+      } else if (evt === 'replace') {
+        logs[data.index] = [data.lines]; 
+        elements[data.index].textContent = logs[data.index].join('\n');
+      } else if (evt === 'clear') {
+        logs[data.index] = [];
+        elements[data.index].textContent = '';
+      }
+    };
+
+    socket.onclose = () => retryConnect();
+    socket.onerror = () => retryConnect();
+  }
+
+  let retryTimeout = null;
+  function retryConnect() {
+    if (retryTimeout) return;
+    retryTimeout = setTimeout(() => {
+      retryTimeout = null;
+      connectSocket();
+    }, 50);
+  }
+
+  connectSocket();
+
+  document.getElementById('reconnect-btn').onclick = () => {
+    const ip = document.getElementById('ip').value;
+    const port = parseInt(document.getElementById('port').value);
+    const count = parseInt(document.getElementById('count').value);
+    const interval = parseInt(document.getElementById('interval').value);
+
+    fetch('http://localhost:3000/reconnect', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ip, port, count, interval })
+    })
+      .then(res => {
+        if (res.ok) console.log('Reconnect request sent');
+        else console.error('Reconnect request failed');
+      })
+      .catch(e => console.error('Fetch error:', e));
   };
 
-  socket.onmessage = (event) => {
-    const { event: evt, data } = JSON.parse(event.data);
-    if (evt === 'init') {
-      logs[data.index] = data.lines;
-      elements[data.index].textContent = logs[data.index].join('\n');
-    } else if (evt === 'log') {
-      logs[data.index].push(data.line);
-      if (logs[data.index].length > 100) logs[data.index].shift();
-      elements[data.index].textContent = logs[data.index].join('\n');
-      elements[data.index].scrollTop = elements[data.index].scrollHeight;
+  // Resizer logic
+  const resizers = document.querySelectorAll('.resizer');
+  let isDragging = false;
+  let dragStartY;
+  let rowStartHeight;
+  let nextRowStartHeight;
+  let rowIndex;
+
+  resizers.forEach((resizer, i) => {
+    resizer.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      isDragging = true;
+      dragStartY = e.clientY;
+      rowIndex = i * 2; 
+
+      const style = window.getComputedStyle(document.body);
+      const rows = style.gridTemplateRows.split(' ');
+
+      rowStartHeight = parseFloat(rows[rowIndex].replace('px','')) || 0;
+      nextRowStartHeight = parseFloat(rows[rowIndex + 2].replace('px','')) || 0;
+
+      window.addEventListener('mousemove', onDrag);
+      window.addEventListener('mouseup', stopDrag);
+    });
+  });
+
+  function onDrag(e) {
+    if (!isDragging) return;
+    const delta = e.clientY - dragStartY;
+    let newRowHeight = rowStartHeight + delta;
+    let newNextRowHeight = nextRowStartHeight - delta;
+
+    if (newRowHeight < 10) {
+      newRowHeight = 10;
+      newNextRowHeight = rowStartHeight + nextRowStartHeight - 10;
+    } else if (newNextRowHeight < 10) {
+      newNextRowHeight = 10;
+      newRowHeight = rowStartHeight + nextRowStartHeight - 10;
     }
-  };
 
-  socket.onclose = () => retryConnect();
-  socket.onerror = () => retryConnect();
-}
+    const style = window.getComputedStyle(document.body);
+    let rows = style.gridTemplateRows.split(' ');
 
-let retryTimeout = null;
-function retryConnect() {
-  if (retryTimeout) return;
-  retryTimeout = setTimeout(() => {
-    retryTimeout = null;
-    connectSocket();
-  }, 50);
-}
+    rows[rowIndex] = newRowHeight + 'px';
+    rows[rowIndex + 2] = newNextRowHeight + 'px';
 
-connectSocket();
+    document.body.style.gridTemplateRows = rows.join(' ');
+  }
 
+  function stopDrag() {
+    if (!isDragging) return;
+    isDragging = false;
+    window.removeEventListener('mousemove', onDrag);
+    window.removeEventListener('mouseup', stopDrag);
+  }
 </script>
-
-
 </body>
 </html>
 

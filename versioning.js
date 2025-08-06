@@ -6,7 +6,8 @@ const translations = {
         keep_alive: 0x26,
         player_position: 0x40,
         disguised_chat: 0x1E,
-        disconnect: 0x1D
+        disconnect: 0x1D,
+        system_chat_message: 0x6C
       },
       s: {
         keep_alive: 0x18,
@@ -22,7 +23,8 @@ const translations = {
         keep_alive: 0x26,
         player_position: 0x41,
         disguised_chat: 0x1D,
-        disconnect: 0x1C
+        disconnect: 0x1C,
+        system_chat_message: 0x72
       },
       s: {
         keep_alive: 0x1A,

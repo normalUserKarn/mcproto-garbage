@@ -1,18 +1,19 @@
-const { translations } = require('./versioning.js');
 const crypto = require('crypto');
 
-function processPacket(data,socket,disableEncryption) {
+module.exports.processPacket = function (data,socket,disableEncryption) {
   let fdata
   if (socket.encrypted && !disableEncryption) {
     fdata = socket.decrypt(data)
   } else {
     fdata = data
   }
+  // console.log(fdata)
   let prevarnt = {}
   if (socket.tmp.length > 0) {
     prevarnt.left = Buffer.concat([socket.tmp,fdata])
     prevarnt.value = socket.tmpMax 
-    prevarnt.data = prevarnt.slice(0,prevarnt.value)
+    prevarnt.data = prevarnt.left.slice(0,prevarnt.value)
+    prevarnt.sliced = prevarnt.left.slice(prevarnt.data.length)
   } else {
     prevarnt = readVarInt(fdata)
   }
@@ -27,7 +28,7 @@ function processPacket(data,socket,disableEncryption) {
     }
   }
 }
-function processCmd(fdata,socket) {
+module.exports.processCmd = function (fdata,socket) {
 
   const packet = translations[socket.proto]
   // this fucking pain in the ass!!!!!!!!!!!!!!!, this exists to splice out the zero from uncompressed data and support minecraft fucking giving me two packets at a time AGGAHGAHHGAHGAHGH
@@ -35,14 +36,9 @@ function processCmd(fdata,socket) {
     let fdatavarint = readVarInt(fdata)
     fdata = fdatavarint.left
     if (fdatavarint.value >= socket.compressionThresh) {
-      // fdata = readVarInt(fdata).left
       fdata = inflate(fdata)
-      // fdata = Buffer.concat([data[0],fdata])
-    } // else {
-      // fdata = Buffer.concat([makeVarInt(fdata.length - 1),fdata.slice(1)])
-    // }
+    } 
   }
-  // console.log(fdata)
 
 
   // before you ask, there isn't any reasoning for calling this varialble darnt
@@ -238,11 +234,11 @@ function processCmd(fdata,socket) {
       // }
       // message = readString(nextvarint.data)
     }
-    if (id == 0x6C) {
+    if (id == packet.p.c.system_chat_message) {
       // WARNING CHANGED IN 1.21.5
       //Reading system chats
       log(2,"thingy appeared")
-      // log(2,readString(darnt).string)
+      log(2,darnt.toString())
     }
     if (id == 0x6F) {
       // WARNING CHANGED IN 1.21.5
@@ -253,4 +249,3 @@ function processCmd(fdata,socket) {
   }
   // if (reprocess) processPacket(prevarnt.sliced,socket)
 }
-module.exports = { processPacket };
